@@ -10,6 +10,14 @@
 // Related to the filestore is the package filelocker, which provides a file-based
 // locking mechanism. The use of some locking method is recommended and further
 // explained in https://tus.github.io/tusd/advanced-topics/locks/.
+//
+// Identical content of completed uploads can be deduplicated with Reconciler
+// (see reconcile.go). It is an idempotent, crash-safe offline pass that merges
+// identical binary files into hard links inside a content-addressed blob
+// directory. Uploads keep their own paths and behavior, while the filesystem
+// link count acts as the reference count: terminating one upload never removes
+// data that other uploads still reference. The tusd-dedupe command wraps it
+// for repeated use, e.g. as a cron job.
 package filestore
 
 import (
