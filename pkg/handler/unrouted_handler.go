@@ -639,6 +639,26 @@ func (handler *UnroutedHandler) PostFileV2(w http.ResponseWriter, r *http.Reques
 	handler.sendResp(c, resp)
 }
 
+// resolveUploadID maps the identifier from a request URL to the canonical
+// upload ID, consulting the configured AliasResolver for read requests. If no
+// resolver is configured or the identifier is not an alias, it is returned
+// unchanged.
+func (handler *UnroutedHandler) resolveUploadID(c *httpContext, id string) (string, error) {
+	if handler.config.AliasResolver == nil {
+		return id, nil
+	}
+
+	canonicalID, found, err := handler.config.AliasResolver.ResolveAlias(c, id)
+	if err != nil {
+		return "", err
+	}
+	if found && canonicalID != "" && canonicalID != id {
+		c.log = c.log.With("canonical_id", canonicalID)
+		return canonicalID, nil
+	}
+	return id, nil
+}
+
 // HeadFile returns the length and offset for the HEAD request
 func (handler *UnroutedHandler) HeadFile(w http.ResponseWriter, r *http.Request) {
 	c := handler.getContext(w, r)
@@ -649,6 +669,12 @@ func (handler *UnroutedHandler) HeadFile(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	c.log = c.log.With("id", id)
+
+	id, err = handler.resolveUploadID(c, id)
+	if err != nil {
+		handler.sendError(c, err)
+		return
+	}
 
 	if handler.composer.UsesLocker {
 		lock, err := handler.lockUpload(c, id)
@@ -1041,6 +1067,12 @@ func (handler *UnroutedHandler) GetFile(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	c.log = c.log.With("id", id)
+
+	id, err = handler.resolveUploadID(c, id)
+	if err != nil {
+		handler.sendError(c, err)
+		return
+	}
 
 	if handler.composer.UsesLocker {
 		lock, err := handler.lockUpload(c, id)

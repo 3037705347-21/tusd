@@ -10,6 +10,7 @@ import (
 	"golang.org/x/exp/slog"
 
 	"github.com/tus/tusd/v2/internal/s3log"
+	"github.com/tus/tusd/v2/pkg/alias"
 	"github.com/tus/tusd/v2/pkg/azurestore"
 	"github.com/tus/tusd/v2/pkg/filelocker"
 	"github.com/tus/tusd/v2/pkg/filestore"
@@ -26,6 +27,10 @@ import (
 )
 
 var Composer *handler.StoreComposer
+
+// AliasResolver is the handler.AliasResolver constructed from the configured
+// alias manifest, if any. It is nil when aliases are disabled.
+var AliasResolver handler.AliasResolver
 
 func CreateComposer() {
 	// Attempt to use S3 as a backend if the -s3-bucket option has been supplied.
@@ -177,6 +182,25 @@ func CreateComposer() {
 		locker.AcquirerPollInterval = Flags.FilelockAcquirerPollInterval
 		locker.HolderPollInterval = Flags.FilelockHolderPollInterval
 		locker.UseIn(Composer)
+
+		// Local disk storage enables the alias manifest by default, located
+		// next to the uploads. The file not existing yet simply means that no
+		// aliases have been bound.
+		aliasPath := Flags.AliasesFile
+		if aliasPath == "" {
+			aliasPath = filepath.Join(dir, "aliases.json")
+		}
+		aliasStore := alias.NewFileStore(aliasPath, store)
+		AliasResolver = aliasStore
+		printStartupLog("Using '%s' as alias manifest.\n", aliasPath)
+	}
+
+	// For remote storage backends the manifest is a local file as well;
+	// canonical uploads are verified through the configured core store. It is
+	// only enabled explicitly because there is no default shared location.
+	if AliasResolver == nil && Flags.AliasesFile != "" {
+		AliasResolver = alias.NewFileStore(Flags.AliasesFile, Composer.Core)
+		printStartupLog("Using '%s' as alias manifest.\n", Flags.AliasesFile)
 	}
 
 	printStartupLog("Using %.2fMB as maximum size.\n", float64(Flags.MaxSize)/1024/1024)

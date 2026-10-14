@@ -95,6 +95,7 @@ var Flags struct {
 	DirPerms                         uint32
 	GracefulRequestCompletionTimeout time.Duration
 	ExperimentalProtocol             bool
+	AliasesFile                      string
 }
 
 type ChmodPermsValue struct {
@@ -158,6 +159,7 @@ func ParseFlags() {
 
 	fs.AddGroup("File storage option", func(f *flag.FlagSet) {
 		f.StringVar(&Flags.UploadDir, "upload-dir", "./data", "Directory to store uploads in")
+		f.StringVar(&Flags.AliasesFile, "aliases-file", "", "JSON file storing the alias manifest that binds legacy upload names to canonical uploads. Defaults to <upload-dir>/aliases.json for local disk storage and is disabled for remote storage unless set. Manage it with the 'tusd aliases' subcommand.")
 		f.DurationVar(&Flags.FilelockHolderPollInterval, "filelock-holder-poll-interval", 5*time.Second, "The holder of a lock polls regularly to see if another request handler needs the lock. This flag specifies the poll interval.")
 		f.DurationVar(&Flags.FilelockAcquirerPollInterval, "filelock-acquirer-poll-interval", 2*time.Second, "The acquirer of a lock polls regularly to see if the lock has been released. This flag specifies the poll interval.")
 		f.Var(&ChmodPermsValue{&Flags.DirPerms}, "dir-perms", "The created directory chmod(2) OCTAL value permissions.")

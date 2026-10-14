@@ -15,6 +15,11 @@ type Config struct {
 	// and optional dependencies should be taken. May only be nil if DataStore is
 	// set.
 	StoreComposer *StoreComposer
+	// AliasResolver, if set, resolves legacy upload identifiers (aliases) in
+	// HEAD and GET requests to the canonical upload they are bound to. Alias
+	// management itself (binding, rebinding and unbinding) is not part of the
+	// tus protocol and is performed against the resolver's store directly.
+	AliasResolver AliasResolver
 	// MaxSize defines how many bytes may be stored in one single upload. If its
 	// value is is 0 or smaller no limit will be enforced.
 	MaxSize int64

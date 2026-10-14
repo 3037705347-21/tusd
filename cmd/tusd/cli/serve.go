@@ -40,6 +40,7 @@ func Serve() {
 		DisableTermination:               Flags.DisableTermination,
 		DisableConcatenation:             Flags.DisableConcatenation,
 		StoreComposer:                    Composer,
+		AliasResolver:                    AliasResolver,
 		UploadProgressInterval:           Flags.ProgressHooksInterval,
 		AcquireLockTimeout:               Flags.AcquireLockTimeout,
 		GracefulRequestCompletionTimeout: Flags.GracefulRequestCompletionTimeout,
