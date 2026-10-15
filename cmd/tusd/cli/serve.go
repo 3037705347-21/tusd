@@ -37,6 +37,7 @@ func Serve() {
 		RespectForwardedHeaders:          Flags.BehindProxy,
 		EnableExperimentalProtocol:       Flags.ExperimentalProtocol,
 		DisableDownload:                  Flags.DisableDownload,
+		DownloadBlocker:                  downloadBlocker,
 		DisableTermination:               Flags.DisableTermination,
 		DisableConcatenation:             Flags.DisableConcatenation,
 		StoreComposer:                    Composer,

@@ -30,6 +30,13 @@ type Config struct {
 	// DisableDownload indicates whether the server will refuse downloads of the
 	// uploaded file, by not mounting the GET handler.
 	DisableDownload bool
+	// DownloadBlocker, if set, is consulted for GET requests after the upload
+	// ID has been extracted but before the data store is accessed. If it
+	// reports the upload as blocked, the download is refused with HTTP 403
+	// (ERR_UPLOAD_QUARANTINED). This can be used to deny downloads of
+	// uploads that failed an external content verification and have been
+	// quarantined. If nil, all downloads are allowed as before.
+	DownloadBlocker DownloadBlocker
 	// DisableTermination indicates whether the server will refuse termination
 	// requests of the uploaded file, by not mounting the DELETE handler.
 	DisableTermination bool

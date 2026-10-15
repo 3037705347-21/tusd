@@ -95,6 +95,8 @@ var Flags struct {
 	DirPerms                         uint32
 	GracefulRequestCompletionTimeout time.Duration
 	ExperimentalProtocol             bool
+	VerifyManifest                   string
+	VerifyLedger                     string
 }
 
 type ChmodPermsValue struct {
@@ -162,6 +164,11 @@ func ParseFlags() {
 		f.DurationVar(&Flags.FilelockAcquirerPollInterval, "filelock-acquirer-poll-interval", 2*time.Second, "The acquirer of a lock polls regularly to see if the lock has been released. This flag specifies the poll interval.")
 		f.Var(&ChmodPermsValue{&Flags.DirPerms}, "dir-perms", "The created directory chmod(2) OCTAL value permissions.")
 		f.Var(&ChmodPermsValue{&Flags.FilePerms}, "file-perms", "The created file chmod(2) OCTAL value permissions.")
+	})
+
+	fs.AddGroup("Content verification options", func(f *flag.FlagSet) {
+		f.StringVar(&Flags.VerifyManifest, "verify-manifest", "", "Path to a JSON manifest (entries of id, size and hex SHA-256 digest) used to verify already stored uploads at startup. Uploads that do not match the manifest are quarantined and refused on GET. Only supported with the local file storage backend.")
+		f.StringVar(&Flags.VerifyLedger, "verify-ledger", "", "Path to the append-only verification ledger JSONL file (defaults to <upload-dir>/.verification/ledger.jsonl). The ledger records every verification result and drives incremental reruns and download blocking.")
 	})
 
 	fs.AddGroup("AWS S3 storage options", func(f *flag.FlagSet) {

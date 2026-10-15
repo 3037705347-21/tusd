@@ -64,6 +64,7 @@ var (
 	ErrUploadInterrupted                = NewError("ERR_UPLOAD_INTERRUPTED", "upload has been interrupted by another request for this upload resource", http.StatusBadRequest)
 	ErrServerShutdown                   = NewError("ERR_SERVER_SHUTDOWN", "request has been interrupted because the server is shutting down", http.StatusServiceUnavailable)
 	ErrOriginNotAllowed                 = NewError("ERR_ORIGIN_NOT_ALLOWED", "request origin is not allowed", http.StatusForbidden)
+	ErrUploadQuarantined                = NewError("ERR_UPLOAD_QUARANTINED", "upload is quarantined and cannot be downloaded", http.StatusForbidden)
 	ErrUnexpectedEOF                    = NewError("ERR_UNEXPECTED_EOF", "server expected to receive more bytes", http.StatusBadRequest)
 
 	// These two responses are 500 for backwards compatability. Clients might receive a timeout response
@@ -1041,6 +1042,21 @@ func (handler *UnroutedHandler) GetFile(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	c.log = c.log.With("id", id)
+
+	// Refuse the download before touching the data store if an external
+	// component (e.g. a content verification run) marked this upload as
+	// blocked/quarantined.
+	if handler.config.DownloadBlocker != nil {
+		blocked, err := handler.config.DownloadBlocker.DownloadBlocked(c, id)
+		if err != nil {
+			handler.sendError(c, err)
+			return
+		}
+		if blocked {
+			handler.sendError(c, ErrUploadQuarantined)
+			return
+		}
+	}
 
 	if handler.composer.UsesLocker {
 		lock, err := handler.lockUpload(c, id)

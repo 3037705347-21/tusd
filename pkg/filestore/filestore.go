@@ -22,6 +22,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/tus/tusd/v2/internal/uid"
 	"github.com/tus/tusd/v2/pkg/handler"
@@ -128,32 +129,12 @@ func (store FileStore) NewUpload(ctx context.Context, info handler.FileInfo) (ha
 }
 
 func (store FileStore) GetUpload(ctx context.Context, id string) (handler.Upload, error) {
-	infoPath := store.infoPath(id)
-	data, err := os.ReadFile(infoPath)
+	info, infoPath, err := store.readInfo(id)
 	if err != nil {
-		if os.IsNotExist(err) {
-			// Interpret os.ErrNotExist as 404 Not Found
-			err = handler.ErrNotFound
-		}
-		return nil, err
-	}
-	var info handler.FileInfo
-	if err := json.Unmarshal(data, &info); err != nil {
 		return nil, err
 	}
 
-	// If the info file contains a custom path to the binary file, we use that. If not, we
-	// fall back to the default value (although the Path property should always be set in recent
-	// tusd versions).
-	var binPath string
-	if info.Storage != nil && info.Storage[StorageKeyPath] != "" {
-		// No filepath.Join here because the joining already happened in NewUpload. Duplicate joining
-		// with relative paths lead to incorrect paths
-		binPath = info.Storage[StorageKeyPath]
-	} else {
-		binPath = store.defaultBinPath(info.ID)
-	}
-
+	binPath := store.binPath(id, info)
 	stat, err := os.Stat(binPath)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -172,6 +153,90 @@ func (store FileStore) GetUpload(ctx context.Context, id string) (handler.Upload
 		dirModePerm:  store.DirModePerm,
 		fileModePerm: store.FileModePerm,
 	}, nil
+}
+
+// readInfo loads and parses the .info file for the upload with the given ID.
+// A missing info file is reported as handler.ErrNotFound.
+func (store FileStore) readInfo(id string) (info handler.FileInfo, infoPath string, err error) {
+	infoPath = store.infoPath(id)
+	data, err := os.ReadFile(infoPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			// Interpret os.ErrNotExist as 404 Not Found
+			err = handler.ErrNotFound
+		}
+		return handler.FileInfo{}, "", err
+	}
+	if err = json.Unmarshal(data, &info); err != nil {
+		return handler.FileInfo{}, "", err
+	}
+	return info, infoPath, nil
+}
+
+// binPath resolves the path of the binary data file for the given upload. If
+// the info file contains a custom path to the binary file, it is used as-is;
+// otherwise the default location based on the upload ID is used.
+func (store FileStore) binPath(id string, info handler.FileInfo) string {
+	// No filepath.Join here because the joining already happened in NewUpload.
+	// Duplicate joining with relative paths leads to incorrect paths.
+	if info.Storage != nil && info.Storage[StorageKeyPath] != "" {
+		return info.Storage[StorageKeyPath]
+	}
+	return store.defaultBinPath(id)
+}
+
+// QuarantineUpload moves the binary data file of the upload with the given ID
+// into quarantineDir, preserving any sub-directory structure implied by the ID
+// (e.g. ID "a/b" is moved to quarantineDir/a/b). The .info file remains at
+// its original location so that metadata is preserved for forensic analysis.
+// After quarantining, GetUpload returns ErrNotFound because the data is no
+// longer available at its original location.
+//
+// If the upload (info file or data file) does not exist, handler.ErrNotFound is
+// returned. If a file already exists at the quarantine destination, an error is
+// returned and the original data file is left untouched. QuarantineDir should
+// reside on the same file system as the upload directory so that the move is
+// an atomic rename.
+func (store FileStore) QuarantineUpload(ctx context.Context, id, quarantineDir string) error {
+	info, _, err := store.readInfo(id)
+	if err != nil {
+		return err
+	}
+
+	binPath := store.binPath(id, info)
+	if _, err := os.Stat(binPath); err != nil {
+		if os.IsNotExist(err) {
+			return handler.ErrNotFound
+		}
+		return err
+	}
+
+	destPath := filepath.Join(quarantineDir, id)
+
+	// Defense in depth: ensure a crafted ID containing ".." segments cannot
+	// resolve the quarantine destination outside of the quarantine directory.
+	rel, err := filepath.Rel(quarantineDir, destPath)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("quarantine destination %q escapes quarantine directory %q", destPath, quarantineDir)
+	}
+
+	// POSIX rename would silently replace an existing destination. Refuse to
+	// overwrite data in the quarantine directory.
+	if _, err := os.Stat(destPath); err == nil {
+		return fmt.Errorf("quarantine destination already exists: %s", destPath)
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+
+	if err := os.MkdirAll(filepath.Dir(destPath), store.DirModePerm); err != nil {
+		return fmt.Errorf("failed to create quarantine directory for %s: %s", destPath, err)
+	}
+
+	if err := os.Rename(binPath, destPath); err != nil {
+		return fmt.Errorf("failed to quarantine upload %s: %s", id, err)
+	}
+
+	return nil
 }
 
 func (store FileStore) AsTerminatableUpload(upload handler.Upload) handler.TerminatableUpload {

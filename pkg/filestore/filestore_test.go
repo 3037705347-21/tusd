@@ -2,6 +2,7 @@ package filestore
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -374,4 +375,198 @@ func TestCustomAbsolutePath(t *testing.T) {
 	statInfo, err := os.Stat(binPath)
 	a.NoError(err)
 	a.True(statInfo.Mode().IsRegular())
+}
+
+// createFinishedUpload is a test helper that creates an upload with the given
+// ID and content in the store.
+func createFinishedUpload(a *assert.Assertions, store FileStore, ctx context.Context, id, content string) handler.Upload {
+	upload, err := store.NewUpload(ctx, handler.FileInfo{
+		ID:   id,
+		Size: int64(len(content)),
+	})
+	a.NoError(err)
+
+	if content != "" {
+		_, err = upload.WriteChunk(ctx, 0, strings.NewReader(content))
+		a.NoError(err)
+	}
+
+	return upload
+}
+
+// TestQuarantineUpload verifies that quarantining moves the data file into the
+// quarantine directory while the .info file stays in place.
+func TestQuarantineUpload(t *testing.T) {
+	a := assert.New(t)
+
+	tmp, err := os.MkdirTemp("", "tusd-filestore-quarantine-")
+	a.NoError(err)
+
+	store := New(tmp)
+	ctx := context.Background()
+	quarantineDir := filepath.Join(tmp, ".quarantine")
+
+	content := "hello quarantine"
+	upload := createFinishedUpload(a, store, ctx, "quarantine-me", content)
+	info, err := upload.GetInfo(ctx)
+	a.NoError(err)
+	binPath := info.Storage[StorageKeyPath]
+	infoPath := info.Storage[StorageKeyInfoPath]
+
+	// Original data and info files exist
+	_, err = os.ReadFile(binPath)
+	a.NoError(err)
+	_, err = os.ReadFile(infoPath)
+	a.NoError(err)
+
+	a.NoError(store.QuarantineUpload(ctx, info.ID, quarantineDir))
+
+	// Data file is gone from its original location
+	_, err = os.Stat(binPath)
+	a.True(os.IsNotExist(err))
+
+	// .info file remains in place
+	_, err = os.ReadFile(infoPath)
+	a.NoError(err)
+
+	// Quarantined file exists with identical content
+	quarantined, err := os.ReadFile(filepath.Join(quarantineDir, info.ID))
+	a.NoError(err)
+	a.Equal(content, string(quarantined))
+
+	// GetUpload now reports the upload as not found
+	gotUpload, err := store.GetUpload(ctx, info.ID)
+	a.Equal(handler.ErrNotFound, err)
+	a.Nil(gotUpload)
+}
+
+// TestQuarantineUploadWithSubDirectory verifies that sub-directory structure
+// implied by the upload ID is preserved inside the quarantine directory.
+func TestQuarantineUploadWithSubDirectory(t *testing.T) {
+	a := assert.New(t)
+
+	tmp, err := os.MkdirTemp("", "tusd-filestore-quarantine-nested-")
+	a.NoError(err)
+
+	store := New(tmp)
+	ctx := context.Background()
+	quarantineDir := filepath.Join(tmp, ".quarantine")
+
+	content := "nested content"
+	upload := createFinishedUpload(a, store, ctx, "project-a/upload-b", content)
+	info, err := upload.GetInfo(ctx)
+	a.NoError(err)
+
+	a.NoError(store.QuarantineUpload(ctx, info.ID, quarantineDir))
+
+	quarantined, err := os.ReadFile(filepath.Join(quarantineDir, "project-a", "upload-b"))
+	a.NoError(err)
+	a.Equal(content, string(quarantined))
+
+	// Original path and info file
+	_, err = os.Stat(filepath.Join(tmp, "project-a", "upload-b"))
+	a.True(os.IsNotExist(err))
+	_, err = os.Stat(filepath.Join(tmp, "project-a", "upload-b.info"))
+	a.NoError(err)
+}
+
+// TestQuarantineUploadPathEscape verifies that an ID containing ".." segments
+// cannot make the quarantine destination escape the quarantine directory.
+func TestQuarantineUploadPathEscape(t *testing.T) {
+	a := assert.New(t)
+
+	base, err := os.MkdirTemp("", "tusd-filestore-quarantine-escape-")
+	a.NoError(err)
+	uploadDir := filepath.Join(base, "uploads")
+	store := New(uploadDir)
+	ctx := context.Background()
+
+	// Simulate an upload created with the crafted ID "../escape": its info
+	// and data files resolve into base/ instead of the upload directory.
+	binPath := filepath.Join(base, "escape")
+	infoPath := filepath.Join(base, "escape.info")
+	info := handler.FileInfo{
+		ID:   "../escape",
+		Size: 1,
+		Storage: map[string]string{
+			"Type":             "filestore",
+			StorageKeyPath:     binPath,
+			StorageKeyInfoPath: infoPath,
+		},
+	}
+	infoData, err := json.Marshal(info)
+	a.NoError(err)
+	a.NoError(os.WriteFile(infoPath, infoData, os.FileMode(DefaultFilePerm)))
+	a.NoError(os.WriteFile(binPath, []byte("x"), os.FileMode(DefaultFilePerm)))
+
+	quarantineDir := filepath.Join(uploadDir, ".quarantine")
+	err = store.QuarantineUpload(ctx, "../escape", quarantineDir)
+	a.Error(err)
+
+	// The data file must remain untouched outside the quarantine directory.
+	data, err := os.ReadFile(binPath)
+	a.NoError(err)
+	a.Equal("x", string(data))
+}
+
+// TestQuarantineUploadMissing verifies that quarantining missing uploads
+// returns ErrNotFound.
+func TestQuarantineUploadMissing(t *testing.T) {
+	a := assert.New(t)
+
+	tmp, err := os.MkdirTemp("", "tusd-filestore-quarantine-missing-")
+	a.NoError(err)
+
+	store := New(tmp)
+	ctx := context.Background()
+
+	// Neither info nor data file exists
+	a.Equal(handler.ErrNotFound, store.QuarantineUpload(ctx, "does-not-exist", filepath.Join(tmp, ".quarantine")))
+
+	// Info file exists but data file is gone (already quarantined/removed).
+	upload, err := store.NewUpload(ctx, handler.FileInfo{ID: "ghost", Size: 3})
+	a.NoError(err)
+	info, err := upload.GetInfo(ctx)
+	a.NoError(err)
+	a.NoError(os.Remove(info.Storage[StorageKeyPath]))
+
+	err = store.QuarantineUpload(ctx, "ghost", filepath.Join(tmp, ".quarantine"))
+	a.Equal(handler.ErrNotFound, err)
+}
+
+// TestQuarantineUploadDestinationExists verifies that an existing quarantine
+// destination causes an error and leaves the original file untouched.
+func TestQuarantineUploadDestinationExists(t *testing.T) {
+	a := assert.New(t)
+
+	tmp, err := os.MkdirTemp("", "tusd-filestore-quarantine-exists-")
+	a.NoError(err)
+
+	store := New(tmp)
+	ctx := context.Background()
+	quarantineDir := filepath.Join(tmp, ".quarantine")
+
+	content := "do not overwrite me"
+	upload := createFinishedUpload(a, store, ctx, "dup-id", content)
+	info, err := upload.GetInfo(ctx)
+	a.NoError(err)
+	binPath := info.Storage[StorageKeyPath]
+
+	// Pre-create the destination file.
+	destPath := filepath.Join(quarantineDir, "dup-id")
+	a.NoError(os.MkdirAll(quarantineDir, os.FileMode(DefaultDirPerm)))
+	a.NoError(os.WriteFile(destPath, []byte("EXISTING"), os.FileMode(DefaultFilePerm)))
+
+	err = store.QuarantineUpload(ctx, "dup-id", quarantineDir)
+	a.Error(err)
+
+	// Original data file is untouched and keeps its content.
+	original, err := os.ReadFile(binPath)
+	a.NoError(err)
+	a.Equal(content, string(original))
+
+	// Destination is untouched as well.
+	existing, err := os.ReadFile(destPath)
+	a.NoError(err)
+	a.Equal("EXISTING", string(existing))
 }

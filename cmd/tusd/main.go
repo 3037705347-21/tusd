@@ -14,6 +14,7 @@ func main() {
 		cli.ShowVersion()
 	} else {
 		cli.CreateComposer()
+		cli.RunVerification()
 		cli.Serve()
 	}
 }

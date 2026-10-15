@@ -193,6 +193,20 @@ type Lock interface {
 	Unlock() error
 }
 
+// DownloadBlocker is an optional interface that can be provided through
+// Config.DownloadBlocker to refuse GET requests for specific uploads. It is
+// consulted after the upload ID has been extracted from the URL, but before
+// the data store is accessed. This can be used, for example, to block
+// downloads for uploads whose contents failed a verification run and have
+// been quarantined.
+type DownloadBlocker interface {
+	// DownloadBlocked reports whether the download of the upload with the
+	// given ID must be refused. If the second return value is non-nil, the
+	// request fails with an internal server error instead of proceeding to
+	// the data store.
+	DownloadBlocked(ctx context.Context, id string) (bool, error)
+}
+
 type ServableUpload interface {
 	// ServeContent serves the uploaded data as specified by the GET request.
 	// It allows data stores to delegate the handling of range requests and conditional
